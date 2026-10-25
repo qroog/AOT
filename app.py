@@ -64,9 +64,9 @@ st.sidebar.markdown("**Сценарий:** Инцидент в социальн�
 st.sidebar.subheader("Параметры LLM")
 default_cred = os.getenv("GIGACHAT_CREDENTIALS", "")
 gigachat_cred = st.sidebar.text_input("GigaChat Credentials", value=default_cred, type="password", help="Authorization Data (Base64 Client ID + Secret)")
-scope_choice = st.sidebar.selectbox("Тип учетной записи (Scope)", ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"], index=0, help="PERS — для физлиц, CORP — для юрлиц")
+scope_choice = st.sidebar.selectbox("Тип учетной записи (Scope)", ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"], index=0, help="PERS — для физлиц, B2B/CORP — для бизнеса")
 
-model_choice = st.sidebar.selectbox("Модель", ["Авто-выбор доступной", "GigaChat", "GigaChat-Pro", "GigaChat-Max", "GigaChat:latest", "Своя модель..."], index=0)
+model_choice = st.sidebar.selectbox("Модель", ["Авто-выбор доступной", "GigaChat", "GigaChat-2", "GigaChat-Pro", "GigaChat-Max", "GigaChat:latest", "Своя модель..."], index=0)
 if model_choice == "Своя модель...":
     model_name = st.sidebar.text_input("Название модели", value="GigaChat")
 elif model_choice == "Авто-выбор доступной":
@@ -79,11 +79,12 @@ if st.sidebar.button("🔍 Проверить подключение и спис
         st.sidebar.warning("Сначала введите Credentials")
     else:
         test_client = LLMClient(credentials=gigachat_cred, scope=scope_choice)
-        models = test_client.get_available_models()
+        models, err = test_client.get_available_models()
         if models:
-            st.sidebar.success(f"Доступные модели: {models}")
+            st.sidebar.success(f"✅ Доступные модели: {models}")
         else:
-            st.sidebar.error("Не удалось получить список моделей. Проверьте правильность ключа и Scope (Физлицо / Юрлицо).")
+            st.sidebar.error(f"❌ Ошибка подключения: {err}")
+            st.sidebar.info("💡 Подсказка: убедитесь, что вставлены именно «Авторизационные данные» (Base64 строка вида 'MDNm...'), а не отдельно Client Secret. Если аккаунт корпоративный, выберите Scope B2B или CORP.")
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("Стресс-тесты (модификаторы)")

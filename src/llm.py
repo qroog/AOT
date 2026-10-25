@@ -2,6 +2,8 @@ import os
 import json
 import re
 import time
+import uuid
+import requests
 from typing import Optional, Dict, Any, Tuple, List
 from dotenv import load_dotenv
 from src.schemas import LLMOutput
@@ -52,39 +54,87 @@ def extract_json_block(text: str) -> Optional[dict]:
             pass
     return None
 
+def fetch_gigachat_models(credentials: str, scope: str = "GIGACHAT_API_PERS") -> Tuple[List[str], Optional[str]]:
+    """
+    Прямой запрос токена и списка моделей к API GigaChat.
+    Возвращает (список моделей, текст ошибки).
+    """
+    creds = credentials.strip()
+    if not creds:
+        return [], "Credentials не указаны."
+
+    # Если уже передан bearer access token
+    if creds.startswith("ey") and len(creds) > 100:
+        token = creds
+    else:
+        # Получаем access token через OAuth
+        auth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+        headers = {
+            "Authorization": f"Basic {creds}",
+            "RqUID": str(uuid.uuid4()),
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        data = {"scope": scope}
+        try:
+            r = requests.post(auth_url, headers=headers, data=data, verify=False, timeout=15)
+            if r.status_code != 200:
+                return [], f"Ошибка авторизации ({r.status_code}): {r.text}"
+            token = r.json().get("access_token")
+            if not token:
+                return [], f"Не удалось извлечь токен: {r.text}"
+        except Exception as e:
+            return [], f"Ошибка соединения с сервером авторизации Сбера: {e}"
+
+    # Запрашиваем модели
+    models_url = "https://gigachat.devices.sberbank.ru/api/v1/models"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+    try:
+        r_models = requests.get(models_url, headers=headers, verify=False, timeout=15)
+        if r_models.status_code != 200:
+            return [], f"Ошибка получения моделей ({r_models.status_code}): {r_models.text}"
+        data = r_models.json().get("data", [])
+        model_ids = [m["id"] for m in data if "id" in m]
+        return model_ids, None
+    except Exception as e:
+        return [], f"Ошибка запроса моделей: {e}"
+
+
 class LLMClient:
     def __init__(self, credentials: Optional[str] = None, model: str = "GigaChat", scope: str = "GIGACHAT_API_PERS"):
-        self.credentials = credentials or os.getenv("GIGACHAT_CREDENTIALS")
+        self.credentials = (credentials or os.getenv("GIGACHAT_CREDENTIALS", "")).strip()
         self.model = model
         self.scope = scope or os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
-        self.client = None
-        if self.credentials:
-            try:
-                from gigachat import GigaChat
-                self.client = GigaChat(
-                    credentials=self.credentials,
-                    scope=self.scope,
-                    verify_ssl_certs=False,
-                    model=self.model,
-                    timeout=60
-                )
-            except Exception as e:
-                print(f"[Warning] Ошибка инициализации GigaChat: {e}")
+        self.access_token = None
 
-    def get_available_models(self) -> List[str]:
-        if not self.client:
-            return []
-        try:
-            models_resp = self.client.get_models()
-            return [m.id for m in models_resp.data]
-        except Exception as e:
-            print(f"[Warning] Не удалось получить список моделей: {e}")
-            return []
+    def get_token(self) -> str:
+        if self.access_token:
+            return self.access_token
+        if self.credentials.startswith("ey") and len(self.credentials) > 100:
+            self.access_token = self.credentials
+            return self.access_token
+        
+        auth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+        headers = {
+            "Authorization": f"Basic {self.credentials}",
+            "RqUID": str(uuid.uuid4()),
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        r = requests.post(auth_url, headers=headers, data={"scope": self.scope}, verify=False, timeout=20)
+        if r.status_code != 200:
+            raise RuntimeError(f"Ошибка получения токена Сбера ({r.status_code}): {r.text}")
+        self.access_token = r.json().get("access_token")
+        return self.access_token
+
+    def get_available_models(self) -> Tuple[List[str], Optional[str]]:
+        return fetch_gigachat_models(self.credentials, self.scope)
 
     def generate(self, user_prompt: str, system_prompt: str = SYSTEM_PROMPT) -> Tuple[Optional[LLMOutput], int, float, str]:
         start_time = time.time()
         
-        if not self.client:
+        if not self.credentials:
             latency = time.time() - start_time
             mock_out = LLMOutput(
                 question_id="MOCK",
@@ -97,45 +147,61 @@ class LLMClient:
             )
             return mock_out, 50, latency, json.dumps(mock_out.model_dump())
 
-        # Определяем рабочую модель
+        # Выбираем доступную модель
+        available_models, _ = self.get_available_models()
         target_model = self.model
-        available = self.get_available_models()
-        if available:
-            if target_model not in available:
-                # Если запрошенной модели нет, берем первую доступную
-                target_model = available[0]
+        if available_models:
+            if target_model not in available_models:
+                target_model = available_models[0]
+        else:
+            # Дефолтный fallback
+            if target_model == "Авто-выбор доступной" or not target_model:
+                target_model = "GigaChat"
 
-        try:
-            from gigachat.models import Chat, Messages, MessagesRole
-            payload = Chat(
-                model=target_model,
-                messages=[
-                    Messages(role=MessagesRole.SYSTEM, content=system_prompt),
-                    Messages(role=MessagesRole.USER, content=user_prompt)
-                ],
-                temperature=0.01,
-                max_tokens=1000
-            )
-            res = self.client.chat(payload)
-            content = res.choices[0].message.content
-            latency = time.time() - start_time
-            tokens = getattr(res.usage, "total_tokens", len(content.split()) * 2) if hasattr(res, "usage") else 100
+        token = self.get_token()
+        chat_url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": target_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.01,
+            "max_tokens": 1000
+        }
+
+        # Отправляем запрос
+        r = requests.post(chat_url, headers=headers, json=payload, verify=False, timeout=60)
+        latency = time.time() - start_time
+        
+        if r.status_code != 200:
+            err_text = r.text
+            if "No such model" in err_text or r.status_code == 404:
+                # Если 404 по модели, попробуем повторить с другой популярной моделью
+                alt_models = ["GigaChat-2", "GigaChat:latest", "GigaChat-Pro", "GigaChat"]
+                for alt in alt_models:
+                    if alt != target_model:
+                        payload["model"] = alt
+                        r_alt = requests.post(chat_url, headers=headers, json=payload, verify=False, timeout=60)
+                        if r_alt.status_code == 200:
+                            r = r_alt
+                            break
             
-            parsed_json = extract_json_block(content)
-            if not parsed_json:
-                raise ValueError(f"Не удалось извлечь JSON из ответа модели:\n{content}")
-            
-            output = LLMOutput.model_validate(parsed_json)
-            return output, tokens, latency, content
-        except Exception as e:
-            latency = time.time() - start_time
-            err_msg = str(e)
-            if "No such model" in err_msg or "404" in err_msg:
-                # Дополнительная информативная подсказка по доступным моделям
-                hint = f" Запрошенная модель: '{target_model}'."
-                if available:
-                    hint += f" Доступные модели для данного токена: {available}."
-                else:
-                    hint += " Проверьте тип учетной записи (Физлицо: GIGACHAT_API_PERS или Юрлицо: GIGACHAT_API_CORP)."
-                raise RuntimeError(f"Модель недоступна: {err_msg}.{hint}")
-            raise RuntimeError(f"Ошибка вызова GigaChat: {e}")
+            if r.status_code != 200:
+                raise RuntimeError(f"GigaChat API ({r.status_code}): {r.text} | Модель: '{target_model}'")
+
+        res_json = r.json()
+        content = res_json["choices"][0]["message"]["content"]
+        usage = res_json.get("usage", {})
+        tokens = usage.get("total_tokens", len(content.split()) * 2)
+
+        parsed_json = extract_json_block(content)
+        if not parsed_json:
+            raise ValueError(f"Не удалось извлечь JSON из ответа модели:\n{content}")
+        
+        output = LLMOutput.model_validate(parsed_json)
+        return output, tokens, latency, content
