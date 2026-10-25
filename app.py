@@ -57,17 +57,36 @@ documents, claims, questions, claim_paths = load_dataset()
 retriever = BM25ClaimRetriever(claims)
 
 # Боковая панель управления
-st.sidebar.title("🕵️ AI-Детектив (Лаб. № 6)")
+st.sidebar.title("AI-Детектив (Лаб. № 6)")
 st.sidebar.markdown("**Курс:** Автоматическая обработка текстов")
 st.sidebar.markdown("**Сценарий:** Инцидент в социальной сети «Сфера» (14.03.2026)")
 
-st.sidebar.subheader("🔑 Параметры LLM")
+st.sidebar.subheader("Параметры LLM")
 default_cred = os.getenv("GIGACHAT_CREDENTIALS", "")
-gigachat_cred = st.sidebar.text_input("GigaChat Credentials", value=default_cred, type="password", help="Client Secret или Auth Key")
-model_name = st.sidebar.selectbox("Модель", ["GigaChat", "GigaChat-Pro"], index=0)
+gigachat_cred = st.sidebar.text_input("GigaChat Credentials", value=default_cred, type="password", help="Authorization Data (Base64 Client ID + Secret)")
+scope_choice = st.sidebar.selectbox("Тип учетной записи (Scope)", ["GIGACHAT_API_PERS", "GIGACHAT_API_CORP"], index=0, help="PERS — для физлиц, CORP — для юрлиц")
+
+model_choice = st.sidebar.selectbox("Модель", ["Авто-выбор доступной", "GigaChat", "GigaChat-Pro", "GigaChat-Max", "GigaChat:latest", "Своя модель..."], index=0)
+if model_choice == "Своя модель...":
+    model_name = st.sidebar.text_input("Название модели", value="GigaChat")
+elif model_choice == "Авто-выбор доступной":
+    model_name = "GigaChat"
+else:
+    model_name = model_choice
+
+if st.sidebar.button("🔍 Проверить подключение и список моделей"):
+    if not gigachat_cred:
+        st.sidebar.warning("Сначала введите Credentials")
+    else:
+        test_client = LLMClient(credentials=gigachat_cred, scope=scope_choice)
+        models = test_client.get_available_models()
+        if models:
+            st.sidebar.success(f"Доступные модели: {models}")
+        else:
+            st.sidebar.error("Не удалось получить список моделей. Проверьте правильность ключа и Scope (Физлицо / Юрлицо).")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("⚡ Стресс-тесты (модификаторы)")
+st.sidebar.subheader("Стресс-тесты (модификаторы)")
 stress_permute = st.sidebar.checkbox("Тест 1: Перестановка документов (seed=42)", value=False)
 stress_remove_premise = st.sidebar.checkbox("Тест 2: Удаление ключевой посылки", value=False)
 selected_remove_id = None
@@ -79,10 +98,10 @@ stress_add_contradiction = st.sidebar.checkbox("Тест 3: Добавление
 
 # Вкладки приложения
 tab_investigation, tab_padic, tab_comparison, tab_dossier = st.tabs([
-    "🔍 Расследование и Вопросы",
-    "🌳 p-Адическая иерархия",
-    "📊 Сравнение режимов (A vs B vs C)",
-    "📁 Цифровое досье"
+    "Расследование и Вопросы",
+    "p-Адическая иерархия",
+    "Сравнение режимов (A vs B vs C)",
+    "Цифровое досье"
 ])
 
 # ==========================================
@@ -108,7 +127,7 @@ with tab_investigation:
     active_docs = list(documents)
     if stress_permute:
         active_docs = permute_documents(active_docs, seed=42)
-        st.info("🔄 Стресс-тест 1 активен: порядок документов переставлен (random_state=42).")
+        st.info("Стресс-тест 1 активен: порядок документов переставлен (random_state=42).")
 
     active_claims = list(claims)
     if stress_remove_premise and selected_remove_id:
@@ -125,7 +144,7 @@ with tab_investigation:
         )
         active_claims = add_contradiction(active_claims, contra_claim)
         claim_paths["C99_CONTRA"] = (2, 2, 1)
-        st.error("⚠️ Стресс-тест 3 активен: добавлено противоречащее внешнее утверждение [C99_CONTRA].")
+        st.error("Стресс-тест 3 активен: добавлено противоречащее внешнее утверждение [C99_CONTRA].")
 
     # Формирование контекста в зависимости от режима
     retriever_active = BM25ClaimRetriever(active_claims)
@@ -138,13 +157,13 @@ with tab_investigation:
     else:
         context_text = build_mode_c_context(top_15_claims, claim_paths)
 
-    with st.expander("👁️ Просмотреть сформированный контекст для модели", expanded=False):
+    with st.expander("Просмотреть сформированный контекст для модели", expanded=False):
         st.text_area("Контекст", context_text, height=220)
 
     # Кнопка запуска
-    if st.button("🚀 Отправить запрос в GigaChat", type="primary"):
+    if st.button("Отправить запрос в GigaChat", type="primary"):
         with st.spinner("Запрос к языковой модели..."):
-            client = LLMClient(credentials=gigachat_cred if gigachat_cred else None, model=model_name)
+            client = LLMClient(credentials=gigachat_cred if gigachat_cred else None, model=model_name, scope=scope_choice)
             user_prompt = f"КОНТЕКСТ:\n{context_text}\n\nВОПРОС {current_q.question_id}: {current_q.question}"
             try:
                 output, tokens, latency, raw = client.generate(user_prompt)
@@ -168,23 +187,23 @@ with tab_investigation:
             
             ev_col1, ev_col2 = st.columns(2)
             with ev_col1:
-                st.markdown("##### 📌 Доказательства (Evidence IDs):")
+                st.markdown("##### Доказательства (Evidence IDs):")
                 st.write(f"Предсказано: `{output.evidence_ids}`")
                 st.write(f"Эталон: `{current_q.gold_evidence_ids}`")
             with ev_col2:
-                st.markdown("##### ⚔️ Контрдоказательства (Counterevidence IDs):")
+                st.markdown("##### Контрдоказательства (Counterevidence IDs):")
                 st.write(f"Предсказано: `{output.counterevidence_ids}`")
                 st.write(f"Эталон: `{current_q.gold_counterevidence_ids}`")
 
             # Метрики вопроса
             eval_res = evaluate_single(current_q, output)
-            st.info(f"📊 Метрики для вопроса: Evidence F1 = **{eval_res['evidence_f1']}** | Precision = **{eval_res['evidence_precision']}** | Recall = **{eval_res['evidence_recall']}**")
+            st.info(f"Метрики для вопроса: Evidence F1 = **{eval_res['evidence_f1']}** | Precision = **{eval_res['evidence_precision']}** | Recall = **{eval_res['evidence_recall']}**")
 
 # ==========================================
 # ВКЛАДКА 2: p-АДИЧЕСКАЯ ИЕРАРХИЯ
 # ==========================================
 with tab_padic:
-    st.header("🌳 p-Адическая организация фактов (p=3)")
+    st.header("p-Адическая организация фактов (p=3)")
     st.markdown("""
     Каждое утверждение кодируется путем $[a_0, a_1, a_2] \in \{0, 1, 2\}^3$:
     - **$a_0$ (Тип источника):** 0 — системный/документальный, 1 — свидетельство/чат, 2 — правило/интерпретация;
@@ -218,7 +237,7 @@ with tab_padic:
 # ВКЛАДКА 3: СРАВНЕНИЕ РЕЖИМОВ
 # ==========================================
 with tab_comparison:
-    st.header("📊 Сравнительный анализ режимов A, B и C")
+    st.header("Сравнительный анализ режимов A, B и C")
     st.markdown("Сравнение поведения модели на одинаковом наборе эталонных вопросов в трех режимах организации контекста.")
 
     # Пример таблицы результатов экспериментов (по требованиям методички)
@@ -240,7 +259,7 @@ with tab_comparison:
 # ВКЛАДКА 4: ДОСЬЕ
 # ==========================================
 with tab_dossier:
-    st.header("📁 Исходное цифровое досье (12 документов)")
+    st.header("Исходное цифровое досье (12 документов)")
     doc_titles = [f"{d.document_id}: {d.title} ({d.source_type})" for d in documents]
     sel_doc_idx = st.selectbox("Выберите документ:", range(len(documents)), format_func=lambda i: doc_titles[i])
     cur_doc = documents[sel_doc_idx]
