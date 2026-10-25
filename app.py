@@ -1,11 +1,16 @@
 import os
 import json
+import importlib
 import streamlit as st
 import pandas as pd
 from typing import List, Dict, Any, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
+
+import src.llm
+importlib.reload(src.llm)
+from src.llm import LLMClient
 
 from src.schemas import Document, Claim, Question, LLMOutput
 from src.retrieval import BM25ClaimRetriever
@@ -85,7 +90,14 @@ if st.sidebar.button("🔍 Проверить подключение и спис
         st.sidebar.warning("Сначала введите Credentials")
     else:
         test_client = LLMClient(credentials=gigachat_cred, scope=scope_choice)
-        models, err = test_client.get_available_models()
+        res = test_client.get_available_models()
+        if isinstance(res, tuple) and len(res) == 2:
+            models, err = res
+        elif isinstance(res, list):
+            models, err = res, None
+        else:
+            models, err = [], str(res)
+
         if models:
             st.sidebar.success(f"✅ Доступные модели: {models}")
         else:
