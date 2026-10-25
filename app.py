@@ -3,6 +3,9 @@ import json
 import streamlit as st
 import pandas as pd
 from typing import List, Dict, Any, Tuple
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from src.schemas import Document, Claim, Question, LLMOutput
 from src.retrieval import BM25ClaimRetriever
@@ -64,7 +67,10 @@ st.sidebar.markdown("**Сценарий:** Инцидент в социальн�
 st.sidebar.subheader("Параметры LLM")
 default_cred = os.getenv("GIGACHAT_CREDENTIALS", "")
 gigachat_cred = st.sidebar.text_input("GigaChat Credentials", value=default_cred, type="password", help="Authorization Data (Base64 Client ID + Secret)")
-scope_choice = st.sidebar.selectbox("Тип учетной записи (Scope)", ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"], index=0, help="PERS — для физлиц, B2B/CORP — для бизнеса")
+default_scope = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+scope_options = ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]
+scope_index = scope_options.index(default_scope) if default_scope in scope_options else 0
+scope_choice = st.sidebar.selectbox("Тип учетной записи (Scope)", scope_options, index=scope_index, help="PERS — для физлиц, B2B/CORP — для бизнеса")
 
 model_choice = st.sidebar.selectbox("Модель", ["Авто-выбор доступной", "GigaChat", "GigaChat-2", "GigaChat-Pro", "GigaChat-Max", "GigaChat:latest", "Своя модель..."], index=0)
 if model_choice == "Своя модель...":

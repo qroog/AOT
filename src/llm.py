@@ -104,7 +104,10 @@ def fetch_gigachat_models(credentials: str, scope: str = "GIGACHAT_API_PERS") ->
 
 class LLMClient:
     def __init__(self, credentials: Optional[str] = None, model: str = "GigaChat", scope: str = "GIGACHAT_API_PERS"):
-        self.credentials = (credentials or os.getenv("GIGACHAT_CREDENTIALS", "")).strip()
+        if credentials is not None:
+            self.credentials = credentials.strip()
+        else:
+            self.credentials = os.getenv("GIGACHAT_CREDENTIALS", "").strip()
         self.model = model
         self.scope = scope or os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
         self.access_token = None
@@ -147,61 +150,75 @@ class LLMClient:
             )
             return mock_out, 50, latency, json.dumps(mock_out.model_dump())
 
-        # Выбираем доступную модель
-        available_models, _ = self.get_available_models()
+        try:
+            available_models, _ = self.get_available_models()
+        except Exception:
+            available_models = []
+
         target_model = self.model
         if available_models:
             if target_model not in available_models:
                 target_model = available_models[0]
         else:
-            # Дефолтный fallback
             if target_model == "Авто-выбор доступной" or not target_model:
                 target_model = "GigaChat"
 
-        token = self.get_token()
-        chat_url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": target_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.01,
-            "max_tokens": 1000
-        }
+        try:
+            token = self.get_token()
+            chat_url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": target_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.01,
+                "max_tokens": 1000
+            }
 
-        # Отправляем запрос
-        r = requests.post(chat_url, headers=headers, json=payload, verify=False, timeout=60)
-        latency = time.time() - start_time
-        
-        if r.status_code != 200:
-            err_text = r.text
-            if "No such model" in err_text or r.status_code == 404:
-                # Если 404 по модели, попробуем повторить с другой популярной моделью
-                alt_models = ["GigaChat-2", "GigaChat:latest", "GigaChat-Pro", "GigaChat"]
-                for alt in alt_models:
-                    if alt != target_model:
-                        payload["model"] = alt
-                        r_alt = requests.post(chat_url, headers=headers, json=payload, verify=False, timeout=60)
-                        if r_alt.status_code == 200:
-                            r = r_alt
-                            break
+            # Отправляем запрос
+            r = requests.post(chat_url, headers=headers, json=payload, verify=False, timeout=60)
+            latency = time.time() - start_time
             
             if r.status_code != 200:
-                raise RuntimeError(f"GigaChat API ({r.status_code}): {r.text} | Модель: '{target_model}'")
+                err_text = r.text
+                if "No such model" in err_text or r.status_code == 404:
+                    alt_models = ["GigaChat-2", "GigaChat:latest", "GigaChat-Pro", "GigaChat"]
+                    for alt in alt_models:
+                        if alt != target_model:
+                            payload["model"] = alt
+                            r_alt = requests.post(chat_url, headers=headers, json=payload, verify=False, timeout=60)
+                            if r_alt.status_code == 200:
+                                r = r_alt
+                                break
+                
+                if r.status_code != 200:
+                    raise RuntimeError(f"GigaChat API ({r.status_code}): {r.text} | Модель: '{target_model}'")
 
-        res_json = r.json()
-        content = res_json["choices"][0]["message"]["content"]
-        usage = res_json.get("usage", {})
-        tokens = usage.get("total_tokens", len(content.split()) * 2)
+            res_json = r.json()
+            content = res_json["choices"][0]["message"]["content"]
+            usage = res_json.get("usage", {})
+            tokens = usage.get("total_tokens", len(content.split()) * 2)
 
-        parsed_json = extract_json_block(content)
-        if not parsed_json:
-            raise ValueError(f"Не удалось извлечь JSON из ответа модели:\n{content}")
-        
-        output = LLMOutput.model_validate(parsed_json)
-        return output, tokens, latency, content
+            parsed_json = extract_json_block(content)
+            if not parsed_json:
+                raise ValueError(f"Не удалось извлечь JSON из ответа модели:\n{content}")
+            
+            output = LLMOutput.model_validate(parsed_json)
+            return output, tokens, latency, content
+        except Exception as e:
+            latency = time.time() - start_time
+            mock_out = LLMOutput(
+                question_id="CONN_ERR",
+                status="insufficient",
+                answer=f"Ошибка соединения / недоступность LLM: {e}",
+                evidence_ids=[],
+                counterevidence_ids=[],
+                confidence=0.5,
+                explanation=f"Сетевой сбой или недоступность сервера GigaChat: {e}"
+            )
+            return mock_out, 50, latency, json.dumps(mock_out.model_dump())

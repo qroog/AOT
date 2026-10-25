@@ -110,7 +110,7 @@ def test_insufficient_with_hallucinated_fact():
 # --- 8. Недоступность LLM ---
 def test_llm_unavailable():
     # Создаем клиент без ключа / с невалидным окружением
-    client = LLMClient(credentials=None)
+    client = LLMClient(credentials="")
     output, tokens, latency, raw = client.generate("Тестовый запрос")
     assert output is not None
     assert output.status == "insufficient"
