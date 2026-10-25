@@ -10,7 +10,7 @@ from src.llm import LLMClient
 from src.evaluation import evaluate_single
 
 load_dotenv()
-st.set_page_config(page_title="AI-Детектив: SphereNet", page_icon="🕵️", layout="wide")
+st.set_page_config(page_title="AI-Детектив: SphereNet", layout="wide")
 
 @st.cache_data
 def load_data():
@@ -24,24 +24,24 @@ docs, claims, questions, claim_paths = load_data()
 retriever = BM25ClaimRetriever(claims)
 
 # Боковое меню
-st.sidebar.title("🕵️ AI-Детектив (Лаб. № 6)")
+st.sidebar.title("AI-Детектив (Лаб. № 6)")
 gigachat_cred = st.sidebar.text_input("GigaChat Credentials", value=os.getenv("GIGACHAT_CREDENTIALS", ""), type="password")
 scope = st.sidebar.selectbox("Scope", ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"], index=0)
 model_choice = st.sidebar.selectbox("Модель", ["Авто", "GigaChat", "GigaChat-2", "GigaChat-Pro", "GigaChat:latest"], index=0)
 model_name = "GigaChat" if model_choice == "Авто" else model_choice
 
-if st.sidebar.button("🔍 Проверить модели"):
+if st.sidebar.button("Проверить модели"):
     m, err = LLMClient(credentials=gigachat_cred, scope=scope).get_available_models()
     st.sidebar.success(f"Модели: {m}") if m else st.sidebar.error(f"Ошибка: {err}")
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("⚡ Стресс-тесты")
+st.sidebar.subheader("Стресс-тесты")
 s_perm = st.sidebar.checkbox("Тест 1: Перестановка документов (seed=42)")
 s_del = st.sidebar.checkbox("Тест 2: Удаление посылки")
 del_id = st.sidebar.selectbox("Удалить утверждение:", [c.claim_id for c in claims], index=33) if s_del else None
 s_contra = st.sidebar.checkbox("Тест 3: Добавить противоречие")
 
-t1, t2, t3, t4 = st.tabs(["🔍 Расследование", "🌳 p-Адическая иерархия", "📊 Сравнение A/B/C", "📁 Досье"])
+t1, t2, t3, t4 = st.tabs(["Расследование", "p-Адическая иерархия", "Сравнение A/B/C", "Досье"])
 
 # Вкладка 1: Анализ вопросов
 with t1:
@@ -58,9 +58,9 @@ with t1:
     top_claims = BM25ClaimRetriever(cur_claims).retrieve(q.question, 15)
     ctx = build_mode_a_context(cur_docs) if "Режим A" in mode else (build_mode_b_context(top_claims) if "Режим B" in mode else build_mode_c_context(top_claims, claim_paths))
 
-    with st.expander("👁️ Контекст для модели"): st.text_area("", ctx, height=180)
+    with st.expander("Контекст для модели"): st.text_area("", ctx, height=180)
 
-    if st.button("🚀 Отправить запрос в GigaChat", type="primary"):
+    if st.button("Отправить запрос в GigaChat", type="primary"):
         with st.spinner("Запрос к модели..."):
             client = LLMClient(credentials=gigachat_cred, model=model_name, scope=scope)
             out, tokens, lat, _ = client.generate(f"КОНТЕКСТ:\n{ctx}\n\nВОПРОС {q.question_id}: {q.question}")
