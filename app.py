@@ -24,7 +24,7 @@ docs, claims, questions, claim_paths = load_data()
 retriever = BM25ClaimRetriever(claims)
 
 # Боковое меню
-st.sidebar.title("AI-Детектив (Лаб. № 6)")
+st.sidebar.title("Лаб. № 6")
 gigachat_cred = st.sidebar.text_input("GigaChat Credentials", value=os.getenv("GIGACHAT_CREDENTIALS", ""), type="password")
 scope = st.sidebar.selectbox("Scope", ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"], index=0)
 model_choice = st.sidebar.selectbox("Модель", ["Авто", "GigaChat", "GigaChat-2", "GigaChat-Pro", "GigaChat:latest"], index=0)

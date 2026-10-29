@@ -1,4 +1,4 @@
-import os, json, re, time, uuid, requests
+import os, json, re, time, uuid, httpx
 from typing import Optional, Dict, Any, Tuple, List
 from dotenv import load_dotenv
 from src.schemas import LLMOutput
@@ -30,25 +30,36 @@ class LLMClient:
     API_URL = "https://gigachat.devices.sberbank.ru/api/v1"
 
     def __init__(self, credentials: Optional[str] = None, model: str = "GigaChat", scope: str = "GIGACHAT_API_PERS"):
-        self.credentials = credentials.strip() if credentials is not None else os.getenv("GIGACHAT_CREDENTIALS", "").strip()
+        if credentials is not None:
+            self.credentials = credentials.strip()
+        else:
+            self.credentials = os.getenv("GIGACHAT_CREDENTIALS", "").strip()
         self.model = model
         self.scope = scope or os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
         self.token = None
+        self.client = httpx.Client(verify=False, timeout=60.0)
 
     def get_token(self) -> str:
         if self.token: return self.token
         if self.credentials.startswith("ey") and len(self.credentials) > 100:
             self.token = self.credentials
             return self.token
-        r = requests.post(self.AUTH_URL, headers={"Authorization": f"Basic {self.credentials}", "RqUID": str(uuid.uuid4())},
-                          data={"scope": self.scope}, verify=False, timeout=15)
+        headers = {
+            "Authorization": f"Basic {self.credentials}",
+            "RqUID": str(uuid.uuid4()),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "User-Agent": "GigaChat-python-lib"
+        }
+        r = self.client.post(self.AUTH_URL, headers=headers, data={"scope": self.scope})
         if r.status_code != 200: raise RuntimeError(f"Auth error ({r.status_code}): {r.text}")
         self.token = r.json().get("access_token")
         return self.token
 
     def get_available_models(self) -> Tuple[List[str], Optional[str]]:
         try:
-            r = requests.get(f"{self.API_URL}/models", headers={"Authorization": f"Bearer {self.get_token()}"}, verify=False, timeout=15)
+            headers = {"Authorization": f"Bearer {self.get_token()}", "Accept": "application/json", "User-Agent": "GigaChat-python-lib"}
+            r = self.client.get(f"{self.API_URL}/models", headers=headers)
             if r.status_code == 200:
                 return [m["id"] for m in r.json().get("data", []) if "id" in m], None
             return [], f"HTTP {r.status_code}: {r.text}"
@@ -61,20 +72,24 @@ class LLMClient:
             out = LLMOutput(question_id="MOCK", status="insufficient", answer="Отсутствуют GIGACHAT_CREDENTIALS", confidence=0.5, explanation="GIGACHAT_CREDENTIALS не заданы.")
             return out, 50, time.time() - t0, json.dumps(out.model_dump())
 
-        models, _ = self.get_available_models()
+        try:
+            models, _ = self.get_available_models()
+        except Exception:
+            models = []
         target = self.model if (models and self.model in models) else (models[0] if models else "GigaChat")
 
         try:
             token = self.get_token()
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json", "User-Agent": "GigaChat-python-lib"}
             payload = {"model": target, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}], "temperature": 0.01, "max_tokens": 1000}
-            r = requests.post(f"{self.API_URL}/chat/completions", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload, verify=False, timeout=60)
+            r = self.client.post(f"{self.API_URL}/chat/completions", headers=headers, json=payload)
             
             # Авто-fallback при 404
             if r.status_code == 404:
                 for alt in ["GigaChat-2", "GigaChat:latest", "GigaChat-Pro"]:
                     if alt != target:
                         payload["model"] = alt
-                        r = requests.post(f"{self.API_URL}/chat/completions", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"}, json=payload, verify=False, timeout=60)
+                        r = self.client.post(f"{self.API_URL}/chat/completions", headers=headers, json=payload)
                         if r.status_code == 200: break
             
             if r.status_code != 200: raise RuntimeError(f"GigaChat API ({r.status_code}): {r.text}")
@@ -85,5 +100,9 @@ class LLMClient:
             parsed = extract_json_block(content) or {}
             return LLMOutput.model_validate(parsed), tokens, time.time() - t0, content
         except Exception as e:
-            out = LLMOutput(question_id="ERR", status="insufficient", answer=f"Сбой: {e}", confidence=0.5, explanation=f"Недоступность LLM: {e}")
+            err_msg = str(e)
+            hint = ""
+            if "Connection" in err_msg or "FileNotFoundError" in err_msg or "ConnectError" in err_msg:
+                hint = " (Проверьте подключение к интернету / VPN. Порт 9443 ngw.devices.sberbank.ru должен быть доступен)."
+            out = LLMOutput(question_id="ERR", status="insufficient", answer=f"Сбой: {e}{hint}", confidence=0.5, explanation=f"Недоступность LLM: {e}{hint}")
             return out, 50, time.time() - t0, json.dumps(out.model_dump())
